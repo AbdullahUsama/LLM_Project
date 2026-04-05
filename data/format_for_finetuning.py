@@ -19,12 +19,18 @@ This script handles:
 import json
 import os
 import re
+import sys
 import openpyxl
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 SCRIPT_DIR  = os.path.dirname(os.path.abspath(__file__))
 PROJECT_DIR = os.path.dirname(SCRIPT_DIR)
 XLSX_PATH   = os.path.join(PROJECT_DIR, "NUST Bank-Product-Knowledge.xlsx")
+
+if PROJECT_DIR not in sys.path:
+    sys.path.insert(0, PROJECT_DIR)
+
+from src.data_pipeline import ingest_new_qa_pairs
 
 OUT_JSONL_INSTRUCT = os.path.join(SCRIPT_DIR, "finetuning_data.jsonl")
 OUT_JSONL_CHAT     = os.path.join(SCRIPT_DIR, "finetuning_data_chat.jsonl")
@@ -37,9 +43,22 @@ SKIP_SHEETS = {"Main", "Rate Sheet July 1 2024", "Sheet1"}
 # (we read them dynamically from the first row of each sheet)
 
 SYSTEM_PROMPT = (
-    "You are a helpful customer support assistant for NUST Bank. "
-    "Answer the customer's question accurately and concisely using "
-    "the bank's product knowledge."
+    """System:
+You are a helpful customer support assistant for NUST Bank.
+
+Your job is to answer questions about NUST Bank products, services, account features, eligibility, fees, limits, procedures, mobile banking, internet banking, transfers, and related FAQs.
+
+Rules:
+- Answer only from the provided context.
+- If the question is outside NUST Bank product or app scope, say you can only help with NUST Bank product and app questions.
+- If the context does not contain enough information, say: "I don't have enough information in the provided knowledge base to answer that accurately."
+- Do not guess, infer, or invent details.
+- Do not add policies, fees, limits, eligibility rules, or procedures unless they are explicitly in the context.
+- Preserve exact product names, numbers, percentages, limits, dates, and conditions from the context.
+- If multiple context chunks conflict, mention the conflict and avoid guessing.
+- Keep the answer concise, factual, and directly responsive.
+- If the question is ambiguous, ask one short clarifying question.
+"""
 )
 
 
@@ -237,39 +256,12 @@ def main():
         print(f"  ✓ {'JSON FAQ':25s} → {sum(len(c.get('questions', [])) for c in faq_data.get('categories', [])):3d} Q&A pairs")
         print(f"Total Q&A pairs (with JSON): {len(all_qa)}")
 
-    # ── Write output files ────────────────────────────────────────────────────
+    # ── Append-safe write/update pipeline ──────────────────────────────────────
+    summary = ingest_new_qa_pairs(all_qa)
 
-    # 1. Human-readable JSON
-    with open(OUT_JSON_ALL, "w", encoding="utf-8") as f:
-        json.dump(all_qa, f, indent=2, ensure_ascii=False)
-    print(f"\n✅ Saved all Q&A pairs → {OUT_JSON_ALL}")
-
-    # 2. Instruction-format JSONL (Alpaca-style)
-    #    { "instruction": "...", "input": "", "output": "..." }
-    with open(OUT_JSONL_INSTRUCT, "w", encoding="utf-8") as f:
-        for qa in all_qa:
-            record = {
-                "instruction": qa["question"],
-                "input": "",
-                "output": qa["answer"],
-                "product": qa["product"],
-            }
-            f.write(json.dumps(record, ensure_ascii=False) + "\n")
-    print(f"✅ Saved instruction JSONL → {OUT_JSONL_INSTRUCT}")
-
-    # 3. OpenAI chat-format JSONL
-    #    { "messages": [ {"role":"system",...}, {"role":"user",...}, {"role":"assistant",...} ] }
-    with open(OUT_JSONL_CHAT, "w", encoding="utf-8") as f:
-        for qa in all_qa:
-            record = {
-                "messages": [
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user",   "content": qa["question"]},
-                    {"role": "assistant", "content": qa["answer"]},
-                ]
-            }
-            f.write(json.dumps(record, ensure_ascii=False) + "\n")
-    print(f"✅ Saved chat JSONL        → {OUT_JSONL_CHAT}")
+    print(f"\n✅ Updated all Q&A pairs      → {OUT_JSON_ALL}")
+    print(f"✅ Updated instruction JSONL  → {OUT_JSONL_INSTRUCT}")
+    print(f"✅ Updated chat JSONL         → {OUT_JSONL_CHAT}")
 
     # ── Summary stats ─────────────────────────────────────────────────────────
     products = {}
@@ -284,6 +276,8 @@ def main():
         print(f"  {prod:<43} {count:>10}")
     print(f"{'─'*60}")
     print(f"  {'TOTAL':<43} {len(all_qa):>10}")
+
+    print(f"\nAppend summary: {summary}")
 
     # Quick quality check – show a few samples
     print(f"\n{'═'*60}")

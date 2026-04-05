@@ -4,6 +4,8 @@ import numpy as np
 import faiss
 from sentence_transformers import SentenceTransformer
 
+from src.data_pipeline import append_raw_faiss_index
+
 def load_and_clean_file(filepath):
 
     with open(filepath, 'r', encoding='utf-8') as file:
@@ -79,12 +81,8 @@ def create_faiss_index(embeddings, chunks, index_path = 'data/faiss_index.bin', 
 
 
 def main():
-    data = load_and_clean_file('data/all_qa_pairs.json')
-    chunks = create_chunks(data)
-    embeddings, model = embed_chunks(chunks)
-    index = create_faiss_index(embeddings, chunks)
-
-    print(f"total chunks: {len(chunks)}, embedding dimension: {embeddings.shape[1]}, embeddings shape: {embeddings.shape}, index size: {index.ntotal}")
+    summary = append_raw_faiss_index()
+    print(f"Append summary: {summary}")
     
 if __name__ == "__main__":
     main()
