@@ -1,105 +1,124 @@
-# LLM Project – Bank Product Knowledge QA
+# LLM Project - Bank Product Knowledge QA
 
-A Retrieval-Augmented Generation (RAG) pipeline that answers banking/product FAQs using a local LLM (Qwen 3.5 via Ollama) grounded in a FAISS vector store built from an Excel knowledge base.
+A Retrieval-Augmented Generation (RAG) project for NUST Bank FAQs. It uses a local Ollama model, FAISS retrieval, guardrails, a FastAPI backend, and a Streamlit chat app.
 
-## Pipeline Overview
+## Group Members
+
+- Hissan Umar - 411644
+- Abdullah Usama - 417872
+
+## Architecture
 
 ```
-Excel KB → format_for_finetuning.py → all_qa_pairs.json
-         → embedder.py  (raw FAISS index)
-         → embedder_2.py (LangChain FAISS vectorstore)
-         → llm.py (RAG QA chain)
+Knowledge data (JSON/Excel)
+    -> data_pipeline.py (clean, dedupe, append)
+    -> raw FAISS index + chunk metadata
+    -> LangChain FAISS vectorstore (data/vectorstore)
+    -> llm_llama.py (retriever + QA chain)
+    -> api_server.py (/query, /ingest, /ingest_excel, memory endpoints)
+    -> streamlit_app.py (chat + add knowledge UI)
 ```
 
-## File Descriptions
+## Current Core Files
 
 | File | Purpose |
 |------|---------|
-| **`embedder.py`** | **Stage 1 embedder.** Loads `all_qa_pairs.json`, cleans & normalises text, chunks each QA pair, embeds them with `all-MiniLM-L6-v2` (SentenceTransformers), and writes a raw FAISS index (`faiss_index.bin`) + chunk metadata JSON. |
-| **`embedder_2.py`** | **Stage 2 embedder (LangChain-compatible).** Reads the chunk metadata produced by `embedder.py`, wraps each chunk as a LangChain `Document`, and builds a LangChain-format FAISS vectorstore (`data/vectorstore/`). This is the index that `llm.py` loads. |
-| **`llm.py`** | **RAG inference.** Loads the LangChain vectorstore and wires it into a `RetrievalQA` chain with `OllamaLLM` (Qwen 3.5 4B). Retrieves the top-3 relevant chunks and generates an answer. |
-| **`search.py`** | Interactive CLI search over the raw FAISS index. Useful for quick similarity lookups without invoking the LLM. |
-| **`data_pipeline.py`** | Shared append-safe ingestion helpers. Adds new Q&A data to the JSON/JSONL files, raw FAISS index, and LangChain vectorstore without dropping existing content. |
-| **`funds_transer_app_features_faq.json`** | Source FAQ data for funds transfer / app features. |
-| **`requirements.txt`** | Python dependencies (LangChain, FAISS, SentenceTransformers, Ollama, etc.). |
+| `api_server.py` | FastAPI app that serves `/query`, ingestion endpoints, health checks, and session-memory routes. |
+| `streamlit_app.py` | Chat UI that calls the API, shows retrieved chunks, and supports adding new knowledge from text or Excel. |
+| `llm_llama.py` | RAG runtime: loads LangChain FAISS, builds RetrievalQA chain, and provides cache refresh after ingestion. |
+| `guardrails.py` | Domain and context checks used before answer generation (out-of-domain and insufficient-context handling). |
+| `data_pipeline.py` | Incremental ingestion pipeline: canonicalize, dedupe, append training files, update FAISS indexes/vectorstore. |
+| `embedder.py` | Entry point to append/rebuild the raw FAISS index from current QA data. |
+| `embedder_2.py` | Entry point to append/rebuild LangChain-compatible FAISS vectorstore. |
+| `search.py` | CLI semantic search utility over the raw FAISS index. |
 
-### `data/` directory
+## Data Files
 
-| File | Purpose |
+| Path | Purpose |
 |------|---------|
-| `all_qa_pairs.json` | All extracted QA pairs from the Excel knowledge base. |
-| `chunk_metadata.json` | Chunk-level metadata written by `embedder.py`. |
-| `format_for_finetuning.py` | Parses the source Excel (`NUST Bank-Product-Knowledge.xlsx`) into JSONL fine-tuning formats and `all_qa_pairs.json`. |
-| `inspect_data.py` | Utility to inspect sheets/columns in the source Excel file. |
-| `finetuning_data.jsonl` | Instruction-format fine-tuning data. |
-| `finetuning_data_chat.jsonl` | OpenAI chat-format fine-tuning data. |
-| `vectorstore/` | LangChain FAISS index (`index.faiss` + pickle) used by `llm.py`. |
+| `data/all_qa_pairs.json` | Master QA pairs used as the source for indexing. |
+| `data/chunk_metadata.json` | Chunk text + metadata aligned with raw FAISS vectors. |
+| `data/faiss_index.bin` | Raw FAISS index for low-level similarity search. |
+| `data/vectorstore/index.faiss` + `data/vectorstore/index.pkl` | LangChain FAISS vectorstore loaded by runtime RAG code. |
+| `data/finetuning_data.jsonl` | Instruction-style fine-tuning records appended during ingestion. |
+| `data/finetuning_data_chat.jsonl` | Chat-format fine-tuning records appended during ingestion. |
 
-## Quickstart
+## Model and Embeddings
+
+- Embeddings: `all-MiniLM-L6-v2`
+- Ollama LLM used by runtime: `llama3.2:3B`
+
+Before running, make sure Ollama is installed and the model is pulled.
 
 ```bash
-# 1. Install dependencies
-pip install -r requirements.txt
-
-# 2. Build embeddings (run in order)
-python embedder.py      # creates raw FAISS index + metadata
-python embedder_2.py    # creates LangChain vectorstore
-
-# 3. Start Ollama (separate terminal)
-ollama serve
-
-# 4. Run RAG QA
-python llm.py
+ollama pull llama3.2:3B
 ```
 
-## API + Streamlit App
-
-You can run the same RAG pipeline behind an HTTP API and query it from Streamlit.
+## Local Run (Root Layout)
 
 ```bash
-# 1. Install dependencies
+# 1) Install dependencies
 pip install -r requirements.txt
 
-# 2. Start Ollama in another terminal
+# 2) Build or refresh retrieval indexes
+python embedder.py
+python embedder_2.py
+
+# 3) Start Ollama (separate terminal)
 ollama serve
 
-# 3. Start API server
+# 4) Start API
 uvicorn api_server:app --host 0.0.0.0 --port 8000 --reload
 
-# 4. Start Streamlit app (new terminal)
+# 5) Start Streamlit (new terminal)
 streamlit run streamlit_app.py
 ```
 
-### API endpoints
+## Notebook / Colab Run (src Layout)
 
-- `GET /health` : server health check
-- `POST /query` : ask a question
-- `POST /ingest` : append new Q&A data, rebuild embeddings, and refresh the vector store
+The notebook `run_llm.ipynb` is now configured to detect and run files from a `src` folder (for example `/content/LLM_Project/src`).
 
-### Streamlit features
+In that setup, keep runtime modules in `src`:
 
-- Chat interface for asking banking questions
-- Optional session memory for follow-up questions
-- An **Add new knowledge** panel in the sidebar to submit a new question/answer/product/sheet
-- The app sends new data to `/ingest`, and the API appends it through the finetuning, raw embedding, and LangChain FAISS steps without overwriting existing data
+- `src/api_server.py`
+- `src/streamlit_app.py`
+- `src/llm_llama.py`
+- `src/guardrails.py`
+- `src/data_pipeline.py`
 
-Example request:
+and ensure required data artifacts are available under `src/data`.
 
-```bash
-curl -X POST "http://127.0.0.1:8000/query" \
-    -H "Content-Type: application/json" \
-    -d '{"query":"Do you have any account for children?","k":3}'
-```
+## API Endpoints
 
-Example ingest request:
+- `GET /health` - health check
+- `POST /query` - retrieve + generate answer
+- `POST /ingest` - add manual QA items
+- `POST /ingest_excel` - upload workbook and extract QA pairs
+- `GET /memory/{session_id}` - view in-memory turns
+- `DELETE /memory/{session_id}` - clear memory for a session
 
-```bash
-curl -X POST "http://127.0.0.1:8000/ingest" \
-    -H "Content-Type: application/json" \
-    -d '{"items":[{"question":"Can a child open an account?","answer":"Yes, ...","product":"Accounts","sheet":"Manual Input"}]}'
-```
+## Streamlit Features
+
+- Chat interface connected to FastAPI `/query`
+- Optional session memory toggle
+- Optional retrieved-context display
+- Sidebar ingestion form:
+    - manual question/answer/product/sheet input
+    - Excel workbook upload (`.xlsx/.xlsm/.xltx/.xltm`)
+- Ingestion status and duplicate-skip reporting
+
+## What Happens During Ingestion
+
+1. New items are cleaned and canonicalized.
+2. Duplicates are skipped using a normalized QA signature.
+3. `all_qa_pairs.json` is updated.
+4. Fine-tuning JSONL files are appended.
+5. Raw FAISS and chunk metadata are appended/recovered.
+6. LangChain vectorstore is appended/rebuilt.
+7. API refreshes cached vectorstore/QA-chain resources so new knowledge is available immediately.
 
 ## Requirements
 
 - Python 3.10+
-- [Ollama](https://ollama.com/) with the `qwen3.5:4b` model pulled
+- Ollama installed and running
+- Dependencies from `requirements.txt`

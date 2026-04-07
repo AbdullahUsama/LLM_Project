@@ -14,8 +14,15 @@ from langchain_core.documents import Document
 from langchain_huggingface import HuggingFaceEmbeddings
 from sentence_transformers import SentenceTransformer
 
-PROJECT_DIR = Path(__file__).resolve().parent
-DATA_DIR = PROJECT_DIR / "data"
+SRC_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = SRC_DIR.parent
+
+# Prefer the repository-level data directory so ingestion and retrieval stay in sync.
+if (PROJECT_ROOT / "data").exists():
+    DATA_DIR = PROJECT_ROOT / "data"
+else:
+    # Backward-compatible fallback for older layouts.
+    DATA_DIR = SRC_DIR / "data"
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 SYSTEM_PROMPT = (
     """System:
@@ -90,6 +97,55 @@ def extract_qa_from_sheet(ws, sheet_name: str) -> list[dict]:
                 if not val.startswith("="):
                     product_name = val
                     break
+
+    # First try tabular extraction (Question/Answer columns), which is common in FAQ workbooks.
+    header_row_idx = None
+    question_col_idx = None
+    answer_col_idx = None
+    product_col_idx = None
+
+    scan_limit = min(ws.max_row, 15)
+    for row_idx in range(1, scan_limit + 1):
+        row_values = [str(v).strip().lower() if v is not None else "" for v in ws.iter_rows(min_row=row_idx, max_row=row_idx, values_only=True).__next__()]
+        for col_idx, value in enumerate(row_values):
+            if question_col_idx is None and value in {"question", "questions", "query", "faq question"}:
+                question_col_idx = col_idx
+            if answer_col_idx is None and value in {"answer", "answers", "response", "faq answer"}:
+                answer_col_idx = col_idx
+            if product_col_idx is None and value in {"product", "category", "service", "segment"}:
+                product_col_idx = col_idx
+
+        if question_col_idx is not None and answer_col_idx is not None:
+            header_row_idx = row_idx
+            break
+
+    if header_row_idx is not None:
+        tabular_pairs: list[dict] = []
+        for row in ws.iter_rows(min_row=header_row_idx + 1, max_row=ws.max_row, values_only=True):
+            q_val = row[question_col_idx] if question_col_idx < len(row) else None
+            a_val = row[answer_col_idx] if answer_col_idx < len(row) else None
+            question = clean_text(str(q_val)) if q_val is not None else ""
+            answer = clean_text(str(a_val)) if a_val is not None else ""
+            if not question or not answer:
+                continue
+
+            row_product = product_name
+            if product_col_idx is not None and product_col_idx < len(row):
+                p_val = row[product_col_idx]
+                if p_val is not None and clean_text(str(p_val)):
+                    row_product = clean_text(str(p_val))
+
+            tabular_pairs.append(
+                {
+                    "question": question,
+                    "answer": answer,
+                    "product": row_product,
+                    "sheet": sheet_name,
+                }
+            )
+
+        if tabular_pairs:
+            return tabular_pairs
 
     rows_data = {}
     for row in ws.iter_rows(min_row=1, max_row=ws.max_row, values_only=False):

@@ -7,23 +7,6 @@ from pydantic import BaseModel, Field
 
 
 class GuardrailConfig(BaseModel):
-    domain_keywords: list[str] = Field(
-        default_factory=lambda: [
-            "nust",
-            "bank",
-            "account",
-            "card",
-            "transfer",
-            "mobile banking",
-            "internet banking",
-            "fee",
-            "limit",
-            "eligibility",
-            "loan",
-            "atm",
-            "transaction",
-        ]
-    )
     out_of_scope_keywords: list[str] = Field(
         default_factory=lambda: [
             "weather",
@@ -48,10 +31,8 @@ default_guardrails = GuardrailConfig()
 
 
 def is_clearly_out_of_scope(query: str, config: GuardrailConfig = default_guardrails) -> bool:
-    q = query.lower()
-    has_out_scope_signal = any(keyword in q for keyword in config.out_of_scope_keywords)
-    has_bank_signal = any(keyword in q for keyword in config.domain_keywords)
-    return has_out_scope_signal and not has_bank_signal
+    q = query.lower().strip()
+    return any(keyword in q for keyword in config.out_of_scope_keywords)
 
 
 def has_sufficient_context(

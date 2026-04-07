@@ -8,8 +8,8 @@ from typing import List
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from pydantic import BaseModel
 
-from guardrails import default_guardrails, has_sufficient_context, is_clearly_out_of_scope
-import llm_llama
+from src.guardrails import default_guardrails, has_sufficient_context, is_clearly_out_of_scope
+from src import llm_llama
 from src.data_pipeline import ALL_QA_PATH, ingest_new_qa_pairs, load_json_list, extract_qa_pairs_from_workbook
 
 class QueryRequest(BaseModel):
