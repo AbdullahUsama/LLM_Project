@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import io
+import os
 import re
 from pathlib import Path
 from typing import Iterable
@@ -24,6 +25,12 @@ else:
     # Backward-compatible fallback for older layouts.
     DATA_DIR = SRC_DIR / "data"
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
+ANONYMIZE_ON_INGEST = os.getenv("ANONYMIZE_ON_INGEST", "true").strip().lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+}
 SYSTEM_PROMPT = (
     """System:
 You are a helpful customer support assistant for NUST Bank.
@@ -58,6 +65,33 @@ def clean_text(text: str) -> str:
     text = re.sub(r"[^\S\n]+", " ", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
+
+
+def anonymize_text(text: str) -> str:
+    if not text:
+        return ""
+
+    sanitized = clean_text(text)
+    if not ANONYMIZE_ON_INGEST:
+        return sanitized
+
+    replacements = [
+        (r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b", "[EMAIL]"),
+        (
+            r"\b(?:\+?92[-\s]?)?(?:0)?3\d{2}[-\s]?\d{7}\b|\b\d{3,5}[-\s]?\d{6,8}\b",
+            "[PHONE]",
+        ),
+        (r"\b\d{5}-?\d{7}-?\d\b", "[CNIC]"),
+        (r"\b\d{13}\b", "[CNIC]"),
+        (r"\b(?:\d[ -]*?){13,19}\b", "[CARD_NUMBER]"),
+        (r"(?i)\b(?:iban|account|a/c|acc(?:ount)?)\b(?:\s*(?:no\.?|number|#)?\s*[:\-]?\s*\d{6,18})", "[ACCOUNT_NUMBER]"),
+        (r"\b[A-Z]{2}\d{2}[A-Z0-9]{10,30}\b", "[IBAN]"),
+    ]
+
+    for pattern, replacement in replacements:
+        sanitized = re.sub(pattern, replacement, sanitized)
+
+    return sanitized
 
 
 def normalize_text(text: str) -> str:
@@ -248,8 +282,8 @@ def canonicalize_qa_pair(
     default_product: str = "Manual Entry",
     default_sheet: str = "Manual Input",
 ) -> dict | None:
-    question = clean_text(item.get("question", ""))
-    answer = clean_text(item.get("answer", ""))
+    question = anonymize_text(item.get("question", ""))
+    answer = anonymize_text(item.get("answer", ""))
     if not question or not answer:
         return None
     return {

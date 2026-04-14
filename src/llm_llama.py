@@ -22,7 +22,9 @@ Guidelines:
 - If the context is missing key details, say: "I don't have enough information in the provided knowledge base to answer that accurately."
 - If the question or context is ambiguous or uncertain, ask for clarification before answering.
 - If needed, ask one brief clarifying question.
-- Prefer actionable next steps over refusal-only replies
+- Prefer actionable next steps over refusal-only replies.
+- Do not stop mid-answer. If the answer has multiple parts, complete all parts before finishing.
+- Provide the full answer requested unless the user explicitly asks for a short response.
 
 
 
@@ -64,15 +66,15 @@ def get_qa_chain() -> RetrievalQA:
     llm = OllamaLLM(
         model="llama3.2:3B",
         keep_alive="30m",
-        num_predict=128,
-        temperature=0.2,
+        num_predict=512,
+        temperature=0.4,
         top_p=1,
     )
     vec_db = get_vectorstore()
     return RetrievalQA.from_chain_type(
         llm=llm,
         chain_type="stuff",
-        retriever=vec_db.as_retriever(search_kwargs={"k": 3}),
+        retriever=vec_db.as_retriever(search_kwargs={"k": 4}),
         chain_type_kwargs={"prompt": PROMPT_TEMPLATE},
         verbose=False,
     )

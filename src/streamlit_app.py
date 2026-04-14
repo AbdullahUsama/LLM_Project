@@ -5,10 +5,14 @@ from uuid import uuid4
 import requests
 import streamlit as st
 
-API_URL = st.sidebar.text_input("API URL", "http://127.0.0.1:8000/query")
+API_REQUEST_TIMEOUT = 240
+INGEST_REQUEST_TIMEOUT = 600
+API_URL = "http://127.0.0.1:8000/query"
+
+st.set_page_config(page_title="NUST Bank QA", page_icon="🏦", layout="wide")
 
 st.title("NUST Bank QA")
-st.caption("Chat with your RAG API using session memory.")
+st.caption("Ask banking questions, review retrieved context, and add new knowledge from the sidebar.")
 
 if "session_id" not in st.session_state:
     st.session_state.session_id = str(uuid4())
@@ -16,66 +20,37 @@ if "session_id" not in st.session_state:
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-show_context = st.sidebar.checkbox("Show retrieved context", value=True)
-use_memory = st.sidebar.checkbox("Use session memory", value=True)
-request_timeout = st.sidebar.number_input(
-    "API timeout (seconds)",
-    min_value=30,
-    max_value=600,
-    value=240,
-    step=30,
-)
-ingest_timeout = st.sidebar.number_input(
-    "Ingest timeout (seconds)",
-    min_value=30,
-    max_value=1800,
-    value=600,
-    step=30,
-)
-st.sidebar.text_input("Session ID", value=st.session_state.session_id, disabled=True)
-
 base_url = API_URL.rsplit("/query", 1)[0] if "/query" in API_URL else API_URL
 
-with st.sidebar.expander("Add new knowledge", expanded=False):
-    with st.form("add_knowledge_form", clear_on_submit=True):
-        uploaded_excel = st.file_uploader(
-            "Or upload an Excel workbook",
-            type=["xlsx", "xlsm", "xltx", "xltm"],
+
+st.sidebar.markdown("### Add new knowledge")
+knowledge_mode = st.sidebar.radio(
+    "Choose a method",
+    ["Manual entry", "Excel upload"],
+    horizontal=True,
+    label_visibility="collapsed",
+)
+
+if knowledge_mode == "Manual entry":
+    st.sidebar.markdown("**Add a single Q&A item**")
+    with st.sidebar.form("add_manual_knowledge_form", clear_on_submit=True):
+        new_question = st.text_area(
+            "Question",
+            height=90,
+            placeholder="Example: What are the charges for NUST Freelancer Digital account?",
         )
-        new_question = st.text_area("Question", height=100, placeholder="Enter the new question")
-        new_answer = st.text_area("Answer", height=160, placeholder="Enter the new answer")
+        new_answer = st.text_area(
+            "Answer",
+            height=140,
+            placeholder="Enter the answer exactly as you want it stored in the knowledge base.",
+        )
         new_product = st.text_input("Product", value="Manual Entry")
-        new_sheet = st.text_input("Sheet", value="Manual Input")
-        add_submit = st.form_submit_button("Add to knowledge base")
+        new_sheet = st.text_input("Source label", value="Manual Input")
+        add_submit = st.form_submit_button("Add manual knowledge")
 
     if add_submit:
-        if uploaded_excel is not None:
-            try:
-                ingest_response = requests.post(
-                    f"{base_url}/ingest_excel",
-                    files={
-                        "file": (
-                            uploaded_excel.name,
-                            uploaded_excel.getvalue(),
-                            uploaded_excel.type or "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        )
-                    },
-                    timeout=ingest_timeout,
-                )
-                ingest_response.raise_for_status()
-                ingest_data = ingest_response.json()
-            except requests.Timeout:
-                st.sidebar.error("Excel ingest timed out. Try a smaller workbook or higher timeout.")
-            except requests.RequestException as exc:
-                st.sidebar.error(f"Excel ingest failed: {exc}")
-            else:
-                st.sidebar.success(
-                    f"Uploaded {ingest_data.get('filename', uploaded_excel.name)}. "
-                    f"Extracted {ingest_data.get('extracted', 0)} pairs, added {ingest_data.get('added', 0)}."
-                )
-                st.sidebar.info("The API/vectorstore were reloaded automatically.")
-        elif not new_question.strip() or not new_answer.strip():
-            st.sidebar.error("Either upload an Excel file or provide both question and answer.")
+        if not new_question.strip() or not new_answer.strip():
+            st.sidebar.error("Please provide both a question and an answer.")
         else:
             try:
                 ingest_response = requests.post(
@@ -90,20 +65,58 @@ with st.sidebar.expander("Add new knowledge", expanded=False):
                             }
                         ]
                     },
-                    timeout=ingest_timeout,
+                    timeout=INGEST_REQUEST_TIMEOUT,
                 )
                 ingest_response.raise_for_status()
                 ingest_data = ingest_response.json()
-            except requests.Timeout:
-                st.sidebar.error("Ingest timed out. Try again with a smaller entry or higher timeout.")
             except requests.RequestException as exc:
                 st.sidebar.error(f"Ingest failed: {exc}")
             else:
                 st.sidebar.success(
-                    f"Added {ingest_data.get('added', 0)} new item(s). "
-                    f"Duplicates skipped: {ingest_data.get('skipped_duplicates', 0)}."
+                    f"Added {ingest_data.get('added', 0)} item(s). Duplicates skipped: {ingest_data.get('skipped_duplicates', 0)}."
                 )
-                st.sidebar.info("The API/vectorstore were reloaded automatically.")
+                st.sidebar.info("The API and vector store were refreshed automatically.")
+else:
+    st.sidebar.markdown("**Upload an Excel workbook**")
+    uploaded_excel = st.sidebar.file_uploader(
+        "Choose an Excel file",
+        type=["xlsx", "xlsm", "xltx", "xltm"],
+        help="Workbook should contain FAQ-style content that can be extracted into question and answer pairs.",
+    )
+    st.sidebar.caption("Supported formats: .xlsx, .xlsm, .xltx, .xltm")
+
+    if st.sidebar.button("Import workbook"):
+        if uploaded_excel is None:
+            st.sidebar.error("Please choose an Excel workbook first.")
+        else:
+            try:
+                ingest_response = requests.post(
+                    f"{base_url}/ingest_excel",
+                    files={
+                        "file": (
+                            uploaded_excel.name,
+                            uploaded_excel.getvalue(),
+                            uploaded_excel.type or "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        )
+                    },
+                    timeout=INGEST_REQUEST_TIMEOUT,
+                )
+                ingest_response.raise_for_status()
+                ingest_data = ingest_response.json()
+            except requests.RequestException as exc:
+                st.sidebar.error(f"Excel ingest failed: {exc}")
+            else:
+                st.sidebar.success(
+                    f"Imported {ingest_data.get('filename', uploaded_excel.name)}. "
+                    f"Extracted {ingest_data.get('extracted', 0)} pair(s), added {ingest_data.get('added', 0)}."
+                )
+                st.sidebar.info("The API and vector store were refreshed automatically.")
+
+st.sidebar.markdown("---")
+
+show_context = st.sidebar.checkbox("Show retrieved context", value=True)
+use_memory = st.sidebar.checkbox("Use session memory", value=True)
+st.sidebar.caption("Session memory is handled automatically in the app. You do not need to manage a session ID manually.")
 
 if st.sidebar.button("Reset memory"):
     try:
@@ -138,14 +151,14 @@ if question:
                     "session_id": st.session_state.session_id,
                     "use_memory": use_memory,
                 },
-                timeout=request_timeout,
+                timeout=API_REQUEST_TIMEOUT,
             )
             response.raise_for_status()
             data = response.json()
         except requests.Timeout:
             answer = (
                 "API request timed out. The model may still be loading or generating. "
-                "Try a shorter question, increase 'API timeout (seconds)', and confirm /health is up."
+                "Try a shorter question and confirm the API health endpoint is up."
             )
             placeholder.error(answer)
         except requests.RequestException as exc:
