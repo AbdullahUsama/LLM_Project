@@ -8,7 +8,13 @@ from typing import List
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from pydantic import BaseModel
 
-from src.guardrails import default_guardrails, has_sufficient_context, is_clearly_out_of_scope
+from src.guardrails import (
+    contains_sensitive_data,
+    default_guardrails,
+    has_sufficient_context,
+    is_clearly_out_of_scope,
+    looks_like_prompt_injection,
+)
 from src import llm_llama
 from src.data_pipeline import ALL_QA_PATH, ingest_new_qa_pairs, load_json_list, extract_qa_pairs_from_workbook
 
@@ -59,7 +65,13 @@ app = FastAPI(title="NUST Bank QA API", version="1.0.0")
 _session_memory: dict[str, list[dict[str, str]]] = defaultdict(list)
 
 
-def _build_query_with_memory(session_id: str, user_query: str, use_memory: bool) -> str:
+def _build_retrieval_query(session_id: str, user_query: str, use_memory: bool) -> str:
+    """Build a retrieval query with conservative memory use to avoid topic drift.
+
+    For most turns, retrieval should use only the latest user query. For very short,
+    referential follow-up questions (e.g., "what about charges for that?"), append the
+    last user turn to recover missing subject context.
+    """
     if not use_memory:
         return user_query
 
@@ -67,16 +79,16 @@ def _build_query_with_memory(session_id: str, user_query: str, use_memory: bool)
     if not history:
         return user_query
 
-    # Keep only the recent turns to avoid overly long prompts.
-    recent_turns = history[-3:]
-    convo = "\n".join(
-        f"User: {turn['user']}\nAssistant: {turn['assistant']}" for turn in recent_turns
-    )
-    return (
-        "Conversation history (for context):\n"
-        f"{convo}\n\n"
-        f"Current user question: {user_query}"
-    )
+    q = user_query.lower().strip()
+    tokens = q.split()
+    referential_markers = {"it", "that", "this", "those", "these", "they", "them", "its"}
+    is_short_follow_up = len(tokens) <= 8 and any(t in referential_markers for t in tokens)
+
+    if not is_short_follow_up:
+        return user_query
+
+    last_user = history[-1]["user"]
+    return f"Previous question: {last_user}\nCurrent question: {user_query}"
 
 
 def _remember_turn(session_id: str, user_query: str, answer: str) -> None:
@@ -110,14 +122,14 @@ def query_api(payload: QueryRequest) -> QueryResponse:
     if not user_query:
         return QueryResponse(answer="Please provide a question.", contexts=[], session_id=session_id)
 
-    if is_clearly_out_of_scope(user_query, default_guardrails):
+    if looks_like_prompt_injection(user_query, default_guardrails):
         return QueryResponse(
-            answer=default_guardrails.out_of_domain_reply,
+            answer=default_guardrails.prompt_injection_reply,
             contexts=[],
             session_id=session_id,
         )
 
-    retrieval_query = _build_query_with_memory(session_id, user_query, payload.use_memory)
+    retrieval_query = _build_retrieval_query(session_id, user_query, payload.use_memory)
     vec_db = llm_llama.get_vectorstore()
     qa_chain = llm_llama.get_qa_chain()
     docs = vec_db.similarity_search(retrieval_query, k=payload.k)
@@ -130,8 +142,19 @@ def query_api(payload: QueryRequest) -> QueryResponse:
             session_id=session_id,
         )
 
+    if is_clearly_out_of_scope(user_query, contexts, default_guardrails):
+        return QueryResponse(
+            answer=default_guardrails.out_of_domain_reply,
+            contexts=[],
+            session_id=session_id,
+        )
+
     result = qa_chain.invoke({"query": retrieval_query})
     answer = result["result"] if isinstance(result, dict) and "result" in result else str(result)
+
+    if contains_sensitive_data(answer, default_guardrails):
+        answer = default_guardrails.sensitive_output_reply
+
     _remember_turn(session_id, user_query, answer)
     return QueryResponse(answer=answer, contexts=contexts, session_id=session_id)
 
